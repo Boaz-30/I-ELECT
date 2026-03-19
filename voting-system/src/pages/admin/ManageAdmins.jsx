@@ -1,415 +1,396 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../../services/supabase'
 import { useAuth } from '../../context/AuthContext'
+import AdminShell from '../../components/admin/AdminShell'
 
-const ADMIN_ROLES = [
-  { value: 'election_officer', label: 'Election Officer' },
-  { value: 'super_admin', label: 'Super Admin' },
-]
+const ADMIN_ROLES = ['election_officer', 'super_admin']
 
-function formatDate(value) {
-  if (!value) return '--'
-  return new Date(value).toLocaleString()
-}
-
-function getName(profile) {
+function RoleBadge({ role }) {
+  const MAP = {
+    super_admin:      { label: 'Super Admin',   bg: '#ede9fe', color: '#5b21b6' },
+    election_officer: { label: 'Officer',       bg: '#dbeafe', color: '#1e40af' },
+    student:          { label: 'Student',       bg: '#f3f4f6', color: '#374151' },
+  }
+  const s = MAP[role] ?? { label: role ?? 'Unknown', bg: '#f3f4f6', color: '#374151' }
   return (
-    profile?.full_name ??
-    profile?.name ??
-    profile?.email ??
-    profile?.student_id ??
-    'Unknown User'
+    <span style={{
+      display: 'inline-block',
+      background: s.bg, color: s.color,
+      borderRadius: '999px', padding: '2px 10px',
+      fontSize: '0.72rem', fontWeight: '700',
+    }}>
+      {s.label}
+    </span>
   )
 }
 
 export default function ManageAdmins() {
-  const navigate = useNavigate()
-  const { role, loading: authLoading } = useAuth()
-  const isSuperAdmin = role === 'super_admin'
+  const { role: myRole, user: myUser } = useAuth()
+  const mountedRef = useRef(true)
 
-  const [admins, setAdmins] = useState([])
-  const [students, setStudents] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [modalOpen, setModalOpen] = useState(false)
-  const [selectedUserId, setSelectedUserId] = useState('')
-  const [selectedRole, setSelectedRole] = useState(ADMIN_ROLES[0].value)
-  const [saving, setSaving] = useState(false)
-  const [actionState, setActionState] = useState({ id: null, type: '' })
+  const [admins,    setAdmins]    = useState([])
+  const [loading,   setLoading]   = useState(true)
+  const [error,     setError]     = useState('')
+  const [success,   setSuccess]   = useState('')
+  const [busy,      setBusy]      = useState(null)  // id of row being mutated
 
-  const modalUserOptions = useMemo(
-    () =>
-      students.map((user) => ({
-        id: user.id,
-        label: `${getName(user)} (${user.email ?? user.student_id ?? 'ID unknown'})`,
-      })),
-    [students]
-  )
-
-  const fetchAdmins = async () => {
-    const { data, error: fetchError } = await supabase
-      .from('profiles')
-      .select('id, full_name, name, email, student_id, role, created_at')
-      .neq('role', 'student')
-      .order('created_at', { ascending: false })
-
-    if (fetchError) {
-      setError(fetchError.message || 'Failed to load admin users.')
-      setAdmins([])
-      return
-    }
-
-    setAdmins(data ?? [])
-  }
-
-  const fetchStudents = async () => {
-    const { data, error: fetchError } = await supabase
-      .from('profiles')
-      .select('id, full_name, name, email, student_id, role, created_at')
-      .eq('role', 'student')
-      .order('created_at', { ascending: false })
-
-    if (fetchError) {
-      setError(fetchError.message || 'Failed to load student users.')
-      setStudents([])
-      return
-    }
-
-    setStudents(data ?? [])
-  }
-
-  const fetchAll = async () => {
-    setLoading(true)
-    setError('')
-    await Promise.all([fetchAdmins(), fetchStudents()])
-    setLoading(false)
-  }
+  // New admin form
+  const [showForm,  setShowForm]  = useState(false)
+  const [formId,    setFormId]    = useState('')      // student ID
+  const [formRole,  setFormRole]  = useState('election_officer')
+  const [saving,    setSaving]    = useState(false)
 
   useEffect(() => {
-    if (authLoading) return
-    if (!isSuperAdmin) {
-      setLoading(false)
-      return
-    }
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
-    fetchAll()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, isSuperAdmin])
-
-  const handleRoleChange = async (userId, nextRole) => {
-    setActionState({ id: userId, type: 'role' })
-    setError('')
-
-    const { error: updateError } = await supabase
+  const loadAdmins = useCallback(async () => {
+    setLoading(true); setError('')
+    const { data, error: qErr } = await supabase
       .from('profiles')
-      .update({ role: nextRole })
-      .eq('id', userId)
+      .select('id, role, created_at')
+      .in('role', ['election_officer', 'super_admin'])
+      .order('created_at', { ascending: false })
 
-    if (updateError) {
-      setError(updateError.message || 'Failed to update role.')
-    }
+    if (!mountedRef.current) return
+    if (qErr) { setError(qErr.message || 'Failed to load admins.') }
+    else { setAdmins(data ?? []) }
+    setLoading(false)
+  }, [])
 
-    setActionState({ id: null, type: '' })
-    await fetchAll()
-  }
+  useEffect(() => { loadAdmins() }, [loadAdmins])
 
-  const handleRemoveAdmin = async (userId) => {
-    const ok = window.confirm('Remove admin access for this user?')
-    if (!ok) return
+  const clearMessages = () => { setError(''); setSuccess('') }
 
-    setActionState({ id: userId, type: 'remove' })
-    setError('')
+  const handleGrantAccess = async (e) => {
+    e.preventDefault()
+    clearMessages()
 
-    const { error: updateError } = await supabase
-      .from('profiles')
-      .update({ role: 'student' })
-      .eq('id', userId)
-
-    if (updateError) {
-      setError(updateError.message || 'Failed to remove admin role.')
-    }
-
-    setActionState({ id: null, type: '' })
-    await fetchAll()
-  }
-
-  const openModal = () => {
-    if (students.length === 0) {
-      setError('No student accounts available to promote.')
-      return
-    }
-    setSelectedUserId(students[0]?.id ?? '')
-    setSelectedRole(ADMIN_ROLES[0].value)
-    setModalOpen(true)
-  }
-
-  const closeModal = () => {
-    if (saving) return
-    setModalOpen(false)
-  }
-
-  const handleAddAdmin = async (event) => {
-    event.preventDefault()
-    setError('')
-
-    if (!selectedUserId) {
-      setError('Select a user to promote.')
+    if (!/^\d{10}$/.test(formId)) {
+      setError('Student ID must be exactly 10 digits.')
       return
     }
 
     setSaving(true)
 
-    const { error: updateError } = await supabase
-      .from('profiles')
-      .update({ role: selectedRole })
-      .eq('id', selectedUserId)
+    // Resolve student ID → auth user via email convention
+    const email = `${formId}@st.ug.edu.gh`
 
-    if (updateError) {
-      setError(updateError.message || 'Failed to assign admin role.')
-      setSaving(false)
-      return
+    // We can't look up auth users from the client directly.
+    // Instead we update the profiles row by looking up via the users' metadata.
+    const { data: profileRows, error: lookupErr } = await supabase
+      .from('profiles')
+      .select('id, role')
+      .eq('id',
+        // sub-select: find user id whose email matches
+        // This only works if profiles.id = auth.users.id (standard setup)
+        // We'll match by looking up through auth admin API — but that's server-side.
+        // Safest client approach: look for a profile whose associated auth user has this email.
+        // Since we can't query auth.users from client, we store student_id in user_metadata
+        // and can filter profiles via a join or RPC.
+        // For now: surface a clear error if not found, admin must use Supabase dashboard.
+        formId   // placeholder — see note below
+      )
+      .maybeSingle()
+
+    // NOTE: The correct approach is a Supabase Edge Function or RPC that:
+    // 1. Looks up the user by email in auth.users (server-side only)
+    // 2. Updates profiles.role for that user's id
+    // We call an RPC here if available, otherwise surface a helpful message.
+    const { error: rpcErr } = await supabase.rpc('grant_admin_role', {
+      p_student_id: formId,
+      p_role: formRole,
+    })
+
+    if (!mountedRef.current) return
+
+    if (rpcErr) {
+      // RPC might not exist yet — show a helpful fallback message
+      if (rpcErr.code === '42883' || rpcErr.message?.includes('does not exist')) {
+        setError(
+          'The grant_admin_role RPC does not exist yet. ' +
+          'To grant admin access, go to your Supabase Dashboard → Table Editor → profiles, ' +
+          `find the user with email ${formId}@st.ug.edu.gh, and manually set their role to "${formRole}".`
+        )
+      } else {
+        setError(rpcErr.message || 'Failed to grant admin access.')
+      }
+    } else {
+      setSuccess(`Admin access granted to student ${formId} as ${formRole}.`)
+      setFormId('')
+      setShowForm(false)
+      await loadAdmins()
     }
 
     setSaving(false)
-    setModalOpen(false)
-    await fetchAll()
   }
 
-  if (authLoading) {
-    return (
-      <main className="page-animate-in min-h-screen bg-slate-50 text-slate-900">
-        <div className="mx-auto w-full max-w-6xl px-4 py-10 md:px-8">
-          <div className="grid min-h-[240px] place-items-center rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center gap-3 text-slate-700">
-              <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-900/20 border-t-slate-900" />
-              <p className="text-sm font-semibold">Loading admin access...</p>
-            </div>
-          </div>
-        </div>
-      </main>
-    )
+  const handleRevoke = async (admin) => {
+    if (admin.id === myUser?.id) {
+      setError('You cannot revoke your own admin access.')
+      return
+    }
+    clearMessages()
+    setBusy(admin.id)
+
+    const { error: revokeErr } = await supabase
+      .from('profiles')
+      .update({ role: 'student' })
+      .eq('id', admin.id)
+
+    if (!mountedRef.current) return
+    if (revokeErr) { setError(revokeErr.message || 'Failed to revoke access.') }
+    else { setSuccess('Admin access revoked.') }
+
+    setBusy(null)
+    await loadAdmins()
   }
 
-  if (!isSuperAdmin) {
+  if (myRole !== 'super_admin') {
     return (
-      <main className="page-animate-in min-h-screen bg-slate-50 text-slate-900">
-        <div className="mx-auto w-full max-w-2xl px-4 py-12 md:px-8">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h1 className="text-2xl font-black tracking-tight">Access Denied</h1>
-            <p className="mt-2 text-sm text-slate-600">
-              Only super admins can manage admin access.
-            </p>
-            <button
-              className="mt-6 inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
-              onClick={() => navigate('/dashboard')}
-              type="button"
-            >
-              Back to Dashboard
-            </button>
-          </div>
+      <AdminShell title="Manage Admins" subtitle="Admin user management">
+        <div style={st.accessDenied}>
+          <span style={{ fontSize: '2rem' }}>🔒</span>
+          <p style={st.accessTitle}>Super Admin access required</p>
+          <p style={st.accessSub}>Only super administrators can manage admin accounts.</p>
         </div>
-      </main>
+      </AdminShell>
     )
   }
 
   return (
-    <main className="page-animate-in min-h-screen bg-slate-50 text-slate-900">
-      <div className="mx-auto w-full max-w-6xl px-4 py-10 md:px-8">
-        <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <h1 className="text-3xl font-black tracking-tight md:text-4xl">Manage Admins</h1>
-            <p className="mt-2 text-sm text-slate-600 md:text-base">
-              Assign roles and manage admin access.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-50 active:translate-y-0"
-              onClick={() => navigate('/admin')}
-              type="button"
-            >
-              Back to Admin Dashboard
-            </button>
-            <button
-              className="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
-              onClick={openModal}
-              type="button"
-            >
-              Add Admin
-            </button>
-          </div>
-        </header>
+    <AdminShell title="Manage Admins" subtitle="Grant and revoke administrative access">
+      <style>{`
+        .ma-row:hover td { background: #f8fafc !important; }
+        .grant-btn:hover { background: #1e429f !important; }
+        .revoke-btn:hover:not(:disabled) { background: #991b1b !important; }
+        .ma-input:focus { outline: none; border-color: #1a56db !important; box-shadow: 0 0 0 3px rgba(26,86,219,0.1) !important; }
+      `}</style>
 
-        {error ? (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-            {error}
-          </div>
-        ) : null}
-
-        <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          {loading ? (
-            <div className="grid min-h-[220px] place-items-center p-6">
-              <div className="flex items-center gap-3 text-slate-700">
-                <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-900/20 border-t-slate-900" />
-                <p className="text-sm font-semibold">Loading admins...</p>
-              </div>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-[760px] w-full border-collapse">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="border-b border-slate-200 px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                      Name
-                    </th>
-                    <th className="border-b border-slate-200 px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                      Role
-                    </th>
-                    <th className="border-b border-slate-200 px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                      Created At
-                    </th>
-                    <th className="border-b border-slate-200 px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {admins.length === 0 ? (
-                    <tr>
-                      <td
-                        className="px-4 py-10 text-center text-sm font-semibold text-slate-500"
-                        colSpan={4}
-                      >
-                        No admin accounts found.
-                      </td>
-                    </tr>
-                  ) : (
-                    admins.map((admin) => (
-                      <tr key={admin.id} className="transition hover:bg-slate-50">
-                        <td className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-900">
-                          {getName(admin)}
-                        </td>
-                        <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-700">
-                          <select
-                            className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-slate-900 focus:ring-4 focus:ring-slate-900/10 disabled:cursor-not-allowed disabled:opacity-60"
-                            value={admin.role ?? ''}
-                            onChange={(event) => handleRoleChange(admin.id, event.target.value)}
-                            disabled={actionState.id === admin.id && actionState.type === 'role'}
-                          >
-                            {ADMIN_ROLES.map((roleOption) => (
-                              <option key={roleOption.value} value={roleOption.value}>
-                                {roleOption.label}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-700">
-                          {formatDate(admin.created_at)}
-                        </td>
-                        <td className="border-b border-slate-100 px-4 py-3 text-sm">
-                          <button
-                            className="inline-flex h-9 items-center justify-center rounded-xl border border-red-200 bg-red-50 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-                            onClick={() => handleRemoveAdmin(admin.id)}
-                            disabled={actionState.id === admin.id && actionState.type === 'remove'}
-                            type="button"
-                          >
-                            {actionState.id === admin.id && actionState.type === 'remove'
-                              ? 'Removing...'
-                              : 'Remove Admin'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+      {/* Action bar */}
+      <div style={st.actionBar}>
+        <p style={st.countText}>
+          {admins.length} admin account{admins.length !== 1 ? 's' : ''}
+        </p>
+        <button
+          style={st.grantBtn}
+          className="grant-btn"
+          onClick={() => { setShowForm(v => !v); clearMessages() }}
+        >
+          {showForm ? '✕ Cancel' : '+ Grant Admin Access'}
+        </button>
       </div>
 
-      {modalOpen ? (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-4 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-black tracking-tight text-slate-900">Add Admin</h2>
-                <p className="mt-1 text-sm text-slate-600">Promote a student to an admin role.</p>
-              </div>
-              <button
-                className="rounded-xl p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:opacity-60"
-                type="button"
-                onClick={closeModal}
+      {/* Grant form */}
+      {showForm && (
+        <form style={st.form} onSubmit={handleGrantAccess}>
+          <h3 style={st.formTitle}>Grant Admin Access</h3>
+          <div style={st.formRow}>
+            <div style={st.field}>
+              <label style={st.label} htmlFor="adminStudentId">Student ID</label>
+              <input
+                id="adminStudentId"
+                className="ma-input"
+                style={st.input}
+                type="text"
+                inputMode="numeric"
+                maxLength={10}
+                value={formId}
+                onChange={e => setFormId(e.target.value.replace(/\D/g, ''))}
+                placeholder="10-digit Student ID"
                 disabled={saving}
-                aria-label="Close"
+              />
+            </div>
+            <div style={st.field}>
+              <label style={st.label} htmlFor="adminRole">Role</label>
+              <select
+                id="adminRole"
+                className="ma-input"
+                style={st.select}
+                value={formRole}
+                onChange={e => setFormRole(e.target.value)}
+                disabled={saving}
               >
-                ✕
+                <option value="election_officer">Election Officer</option>
+                <option value="super_admin">Super Admin</option>
+              </select>
+            </div>
+            <div style={st.field}>
+              <label style={st.label}>&nbsp;</label>
+              <button
+                type="submit"
+                className="grant-btn"
+                style={{ ...st.grantBtn, ...(saving ? { opacity: 0.6, cursor: 'not-allowed' } : {}) }}
+                disabled={saving}
+              >
+                {saving ? 'Granting…' : 'Grant Access'}
               </button>
             </div>
-
-            <form className="mt-5 grid gap-4" onSubmit={handleAddAdmin}>
-              <div>
-                <label className="text-sm font-semibold text-slate-700" htmlFor="adminUser">
-                  Select User
-                </label>
-                <select
-                  id="adminUser"
-                  className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-slate-900 focus:ring-4 focus:ring-slate-900/10"
-                  value={selectedUserId}
-                  onChange={(event) => setSelectedUserId(event.target.value)}
-                >
-                  {modalUserOptions.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-sm font-semibold text-slate-700" htmlFor="adminRole">
-                  Role
-                </label>
-                <select
-                  id="adminRole"
-                  className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-slate-900 focus:ring-4 focus:ring-slate-900/10"
-                  value={selectedRole}
-                  onChange={(event) => setSelectedRole(event.target.value)}
-                >
-                  {ADMIN_ROLES.map((roleOption) => (
-                    <option key={roleOption.value} value={roleOption.value}>
-                      {roleOption.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="mt-1 flex flex-wrap gap-2">
-                <button
-                  type="submit"
-                  className="inline-flex h-10 flex-1 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
-                  disabled={saving}
-                >
-                  {saving ? 'Saving...' : 'Assign Role'}
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-10 flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
-                  onClick={closeModal}
-                  disabled={saving}
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
           </div>
-        </div>
-      ) : null}
-    </main>
+        </form>
+      )}
+
+      {/* Messages */}
+      {error   && <div style={st.errorBox}>{error}</div>}
+      {success && <div style={st.successBox}>{success}</div>}
+
+      {/* Table */}
+      <div style={st.tableWrap}>
+        <table style={st.table}>
+          <thead>
+            <tr>
+              <th style={st.th}>User ID</th>
+              <th style={st.th}>Role</th>
+              <th style={st.th}>Granted</th>
+              <th style={st.th}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={4} style={st.centerCell}>
+                  <div style={st.loadingRow}>
+                    <div style={st.spinner} />
+                    Loading admins…
+                  </div>
+                </td>
+              </tr>
+            ) : admins.length === 0 ? (
+              <tr>
+                <td colSpan={4} style={st.centerCell}>No admin accounts found.</td>
+              </tr>
+            ) : (
+              admins.map(admin => (
+                <tr key={admin.id} className="ma-row">
+                  <td style={{ ...st.td, ...st.mono }}>{admin.id.slice(0, 16)}…</td>
+                  <td style={st.td}><RoleBadge role={admin.role} /></td>
+                  <td style={st.td}>{admin.created_at ? new Date(admin.created_at).toLocaleDateString() : '—'}</td>
+                  <td style={st.td}>
+                    {admin.id === myUser?.id ? (
+                      <span style={st.selfTag}>You</span>
+                    ) : (
+                      <button
+                        className="revoke-btn"
+                        style={{ ...st.revokeBtn, ...(busy === admin.id ? { opacity: 0.6, cursor: 'not-allowed' } : {}) }}
+                        disabled={busy === admin.id}
+                        onClick={() => handleRevoke(admin)}
+                      >
+                        {busy === admin.id ? 'Revoking…' : 'Revoke Access'}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </AdminShell>
   )
+}
+
+const st = {
+  accessDenied: {
+    background: '#fff', border: '1px solid #e5e7eb',
+    borderRadius: '16px', padding: '3rem',
+    textAlign: 'center', display: 'flex',
+    flexDirection: 'column', alignItems: 'center', gap: '8px',
+  },
+  accessTitle: { margin: 0, fontSize: '1.1rem', fontWeight: '700', color: '#0f172a' },
+  accessSub:   { margin: 0, color: '#6b7280', fontSize: '0.875rem' },
+  actionBar: {
+    display: 'flex', justifyContent: 'space-between',
+    alignItems: 'center', flexWrap: 'wrap', gap: '10px',
+  },
+  countText: { margin: 0, color: '#6b7280', fontSize: '0.85rem', fontWeight: '600' },
+  grantBtn: {
+    background: 'linear-gradient(135deg,#1a56db,#6366f1)',
+    border: 'none', borderRadius: '10px', color: '#fff',
+    padding: '9px 18px', fontSize: '0.875rem', fontWeight: '700',
+    cursor: 'pointer', fontFamily: "'Sora', sans-serif",
+    transition: 'background 0.15s',
+  },
+  form: {
+    background: '#fff', border: '1px solid #e5e7eb',
+    borderRadius: '14px', padding: '1.25rem',
+    display: 'flex', flexDirection: 'column', gap: '1rem',
+  },
+  formTitle: { margin: 0, fontSize: '1rem', fontWeight: '800', color: '#0f172a' },
+  formRow: {
+    display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-end',
+  },
+  field: { display: 'flex', flexDirection: 'column', gap: '4px' },
+  label: {
+    fontSize: '0.72rem', fontWeight: '700', color: '#6b7280',
+    textTransform: 'uppercase', letterSpacing: '0.06em',
+  },
+  input: {
+    height: '38px', border: '1px solid #e5e7eb',
+    borderRadius: '8px', padding: '0 12px',
+    background: '#f9fafb', color: '#0f172a',
+    fontSize: '0.875rem', fontFamily: "'Sora', sans-serif",
+    transition: 'border-color 0.15s, box-shadow 0.15s',
+    minWidth: '180px',
+  },
+  select: {
+    height: '38px', border: '1px solid #e5e7eb',
+    borderRadius: '8px', padding: '0 10px',
+    background: '#f9fafb', color: '#0f172a',
+    fontSize: '0.875rem', fontFamily: "'Sora', sans-serif",
+    transition: 'border-color 0.15s',
+    minWidth: '160px', cursor: 'pointer',
+  },
+  errorBox: {
+    background: '#fef2f2', border: '1px solid #fecaca',
+    borderRadius: '10px', padding: '12px 16px',
+    color: '#991b1b', fontSize: '0.875rem', fontWeight: '500',
+  },
+  successBox: {
+    background: '#f0fdf4', border: '1px solid #bbf7d0',
+    borderRadius: '10px', padding: '12px 16px',
+    color: '#15803d', fontSize: '0.875rem', fontWeight: '500',
+  },
+  tableWrap: {
+    background: '#fff', border: '1px solid #e5e7eb',
+    borderRadius: '16px', overflow: 'hidden',
+  },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' },
+  th: {
+    textAlign: 'left', fontWeight: '700', padding: '11px 14px',
+    borderBottom: '1px solid #e5e7eb', color: '#374151',
+    background: '#f9fafb', fontSize: '0.75rem',
+    textTransform: 'uppercase', letterSpacing: '0.05em',
+  },
+  td: {
+    padding: '11px 14px', borderBottom: '1px solid #f3f4f6',
+    color: '#0f172a', verticalAlign: 'middle',
+  },
+  mono: {
+    fontFamily: "'JetBrains Mono','Courier New',monospace",
+    fontSize: '0.78rem', color: '#6b7280',
+  },
+  centerCell: { padding: '2rem', textAlign: 'center', color: '#6b7280' },
+  loadingRow: {
+    display: 'flex', alignItems: 'center',
+    justifyContent: 'center', gap: '10px',
+    fontWeight: '600', fontSize: '0.875rem',
+  },
+  spinner: {
+    width: '18px', height: '18px',
+    border: '2px solid #e5e7eb', borderTopColor: '#1a56db',
+    borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+  },
+  revokeBtn: {
+    background: '#dc2626', border: 'none',
+    borderRadius: '7px', color: '#fff',
+    padding: '5px 12px', fontSize: '0.78rem', fontWeight: '700',
+    cursor: 'pointer', fontFamily: "'Sora', sans-serif",
+    transition: 'background 0.12s',
+  },
+  selfTag: {
+    background: '#ede9fe', color: '#5b21b6',
+    borderRadius: '999px', padding: '2px 10px',
+    fontSize: '0.72rem', fontWeight: '700',
+  },
 }

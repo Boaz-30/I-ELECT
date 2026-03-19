@@ -1,128 +1,306 @@
-import { useMemo } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useMemo, useState } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 
-function cx(...values) {
-  return values.filter(Boolean).join(' ')
+const NAV_ITEMS = [
+  { label: 'Dashboard',          path: '/admin',                icon: '🏠', exact: true  },
+  { label: 'Elections',          path: '/admin/elections',      icon: '🗳️', exact: false },
+  { label: 'Positions',          path: '/admin/positions',      icon: '📋', exact: false },
+  { label: 'Candidates',         path: '/admin/candidates',     icon: '👤', exact: false },
+  { label: 'Live Results',       path: '/admin/live-results',   icon: '📊', exact: false },
+  { label: 'Audit Logs',         path: '/admin/audit-logs',     icon: '📝', exact: false },
+]
+
+const SUPER_NAV_ITEMS = [
+  { label: 'Manage Admins',      path: '/admin/manage-admins',  icon: '⚙️', exact: false },
+  { label: 'Create Admin',       path: '/admin/create-admin',   icon: '➕', exact: false },
+]
+
+function isActive(pathname, item) {
+  if (item.exact) return pathname === item.path
+  return pathname.startsWith(item.path)
 }
 
-export default function AdminShell({ title, subtitle, actions, children }) {
-  const navigate = useNavigate()
-  const location = useLocation()
+export default function AdminShell({ children, title, subtitle }) {
+  const navigate   = useNavigate()
+  const location   = useLocation()
   const { user, role, logout } = useAuth()
+  const [collapsed, setCollapsed] = useState(false)
 
-  const adminName =
-    user?.user_metadata?.full_name ??
-    user?.user_metadata?.name ??
-    user?.email?.split('@')[0] ??
-    'Admin'
+  const adminName = user?.user_metadata?.full_name
+    ?? user?.user_metadata?.name
+    ?? user?.email?.split('@')[0]
+    ?? 'Admin'
 
   const navItems = useMemo(() => {
-    const base = [
-      { label: 'Dashboard', path: '/admin' },
-      { label: 'Elections', path: '/admin/elections' },
-      { label: 'Positions', path: '/admin/positions' },
-      { label: 'Candidates', path: '/admin/candidates' },
-      { label: 'Live Results', path: '/admin/live-results' },
-      { label: 'Audit Logs', path: '/admin/audit-logs' },
-    ]
-
-    if (role === 'super_admin') {
-      base.push({ label: 'Manage Admins', path: '/admin/manage-admins' })
-    }
-
-    return base
+    const items = [...NAV_ITEMS]
+    if (role === 'super_admin') items.push(...SUPER_NAV_ITEMS)
+    return items
   }, [role])
 
-  const logoutHandler = async () => {
-    try {
-      await logout()
-    } finally {
-      navigate('/login')
-    }
+  const handleLogout = async () => {
+    try { await logout() } finally { navigate('/login') }
   }
 
-  const activePath = location.pathname
-
   return (
-    <div className="page-animate-in min-h-screen bg-slate-50 text-slate-900">
-      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[280px_1fr]">
-        <aside className="border-b border-slate-200 bg-white lg:border-b-0 lg:border-r">
-          <div className="flex h-full flex-col justify-between gap-6 p-4 lg:p-5">
-            <div className="grid gap-5">
-              <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-sm">
-                  <span className="text-sm font-extrabold tracking-wide">UV</span>
-                </div>
-                <div>
-                  <p className="text-lg font-black tracking-tight">UniVote</p>
-                  <p className="text-xs font-bold tracking-[0.16em] text-slate-500">
-                    ADMINISTRATOR
-                  </p>
-                </div>
-              </div>
+    <div style={s.shell}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&display=swap');
+        @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        .ash-nav-item:hover { background: rgba(255,255,255,0.08) !important; color: #fff !important; }
+        .ash-nav-item.active { background: rgba(26,86,219,0.25) !important; color: #93c5fd !important; }
+        .ash-logout:hover { background: rgba(239,68,68,0.2) !important; }
+        .ash-collapse:hover { background: rgba(255,255,255,0.1) !important; }
+      `}</style>
 
-              <nav className="grid gap-1">
-                {navItems.map((item) => {
-                  const isActive =
-                    item.path === '/admin'
-                      ? activePath === '/admin' || activePath === '/admin/dashboard'
-                      : activePath.startsWith(item.path)
-
-                  return (
-                    <button
-                      key={item.label}
-                      className={cx(
-                        'inline-flex h-10 items-center rounded-xl px-3 text-left text-sm font-semibold transition',
-                        isActive
-                          ? 'bg-slate-900 text-white shadow-sm'
-                          : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
-                      )}
-                      onClick={() => navigate(item.path)}
-                      type="button"
-                    >
-                      {item.label}
-                    </button>
-                  )
-                })}
-              </nav>
-            </div>
-
-            <button
-              className="inline-flex h-10 items-center justify-center rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-700 transition hover:bg-red-100"
-              onClick={logoutHandler}
-              type="button"
-            >
-              Logout
-            </button>
+      {/* ── Sidebar ─────────────────────────────────────────────────── */}
+      <aside style={{ ...s.sidebar, width: collapsed ? '64px' : '240px' }}>
+        {/* Brand */}
+        <div style={s.brand}>
+          <div style={s.brandIcon}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" fill="#fff"/>
+              <path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
           </div>
-        </aside>
+          {!collapsed && <span style={s.brandText}>UniVote</span>}
+          <button
+            className="ash-collapse"
+            onClick={() => setCollapsed(v => !v)}
+            style={s.collapseBtn}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              {collapsed
+                ? <polyline points="9 18 15 12 9 6"/>
+                : <polyline points="15 18 9 12 15 6"/>}
+            </svg>
+          </button>
+        </div>
 
-        <section className="flex min-w-0 flex-col">
-          <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
-            <div className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between md:px-6">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-black tracking-tight text-slate-900">
-                  {title}
-                </p>
-                {subtitle ? (
-                  <p className="mt-0.5 truncate text-sm text-slate-600">{subtitle}</p>
-                ) : null}
-              </div>
+        {/* Role badge */}
+        {!collapsed && (
+          <div style={s.roleBadge}>
+            {role === 'super_admin' ? 'Super Administrator' : 'Election Officer'}
+          </div>
+        )}
 
-              <div className="flex flex-wrap items-center justify-between gap-2 md:justify-end">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
-                  {role === 'super_admin' ? 'Super Admin' : 'Admin'} · {adminName}
-                </div>
-                {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
+        {/* Nav */}
+        <nav style={s.nav}>
+          {navItems.map(item => {
+            const active = isActive(location.pathname, item)
+            return (
+              <button
+                key={item.path}
+                className={`ash-nav-item${active ? ' active' : ''}`}
+                onClick={() => navigate(item.path)}
+                style={{ ...s.navItem, justifyContent: collapsed ? 'center' : 'flex-start' }}
+                title={collapsed ? item.label : undefined}
+              >
+                <span style={s.navIcon}>{item.icon}</span>
+                {!collapsed && <span style={s.navLabel}>{item.label}</span>}
+              </button>
+            )
+          })}
+        </nav>
+
+        {/* Bottom */}
+        <div style={s.sidebarBottom}>
+          {!collapsed && (
+            <div style={s.adminInfo}>
+              <div style={s.adminAvatar}>{adminName.charAt(0).toUpperCase()}</div>
+              <div style={s.adminText}>
+                <p style={s.adminName}>{adminName}</p>
+                <p style={s.adminRole}>{role === 'super_admin' ? 'Super Admin' : 'Officer'}</p>
               </div>
             </div>
-          </header>
+          )}
+          <button
+            className="ash-logout"
+            onClick={handleLogout}
+            style={{ ...s.logoutBtn, justifyContent: collapsed ? 'center' : 'flex-start' }}
+            title="Logout"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            {!collapsed && <span>Logout</span>}
+          </button>
+        </div>
+      </aside>
 
-          <main className="w-full px-4 py-8 md:px-6">{children}</main>
-        </section>
+      {/* ── Main area ───────────────────────────────────────────────── */}
+      <div style={s.main}>
+        {/* Top bar */}
+        <header style={s.topbar}>
+          <div>
+            {title    && <h1 style={s.topTitle}>{title}</h1>}
+            {subtitle && <p  style={s.topSub}>{subtitle}</p>}
+          </div>
+          <div style={s.topRight}>
+            {/* Live election dot */}
+            <div style={s.sessionTag}>
+              <span style={s.sessionDot} />
+              <span style={s.sessionText}>Admin Session</span>
+            </div>
+          </div>
+        </header>
+
+        {/* Page content */}
+        <div style={s.content}>
+          {children}
+        </div>
       </div>
     </div>
   )
 }
 
+const s = {
+  shell: {
+    minHeight: '100vh',
+    display: 'flex',
+    fontFamily: "'Sora', sans-serif",
+    background: '#f8fafc',
+    color: '#0f172a',
+  },
+  sidebar: {
+    background: '#0f172a',
+    minHeight: '100vh',
+    display: 'flex',
+    flexDirection: 'column',
+    position: 'sticky',
+    top: 0,
+    height: '100vh',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    flexShrink: 0,
+    transition: 'width 0.2s ease',
+  },
+  brand: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '1.1rem 1rem 0.6rem',
+    borderBottom: '1px solid rgba(255,255,255,0.07)',
+  },
+  brandIcon: {
+    width: '32px', height: '32px', flexShrink: 0,
+    background: 'linear-gradient(135deg,#1a56db,#6366f1)',
+    borderRadius: '9px',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  brandText: {
+    fontSize: '1.15rem', fontWeight: '800',
+    color: '#fff', letterSpacing: '-0.02em',
+    flex: 1, overflow: 'hidden',
+  },
+  collapseBtn: {
+    background: 'transparent', border: 'none',
+    color: 'rgba(255,255,255,0.4)', cursor: 'pointer',
+    padding: '4px', borderRadius: '6px',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    transition: 'background 0.15s',
+    flexShrink: 0,
+  },
+  roleBadge: {
+    margin: '0.5rem 1rem',
+    color: 'rgba(255,255,255,0.35)',
+    fontSize: '0.65rem', fontWeight: '700',
+    textTransform: 'uppercase', letterSpacing: '0.09em',
+    overflow: 'hidden', whiteSpace: 'nowrap',
+  },
+  nav: {
+    flex: 1,
+    padding: '0.4rem 0.5rem',
+    display: 'flex', flexDirection: 'column', gap: '2px',
+  },
+  navItem: {
+    width: '100%',
+    display: 'flex', alignItems: 'center', gap: '10px',
+    background: 'transparent', border: 'none',
+    borderRadius: '9px', padding: '9px 10px',
+    color: 'rgba(255,255,255,0.55)',
+    fontFamily: "'Sora', sans-serif",
+    fontSize: '0.86rem', fontWeight: '600',
+    cursor: 'pointer', textAlign: 'left',
+    transition: 'background 0.12s, color 0.12s',
+    whiteSpace: 'nowrap', overflow: 'hidden',
+  },
+  navIcon: { fontSize: '0.95rem', flexShrink: 0, width: '20px', textAlign: 'center' },
+  navLabel: { overflow: 'hidden', textOverflow: 'ellipsis' },
+  sidebarBottom: {
+    padding: '0.75rem 0.5rem',
+    borderTop: '1px solid rgba(255,255,255,0.07)',
+    display: 'flex', flexDirection: 'column', gap: '6px',
+  },
+  adminInfo: {
+    display: 'flex', alignItems: 'center', gap: '10px',
+    padding: '8px 8px',
+    background: 'rgba(255,255,255,0.05)', borderRadius: '10px',
+    overflow: 'hidden',
+  },
+  adminAvatar: {
+    width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0,
+    background: 'linear-gradient(135deg,#1a56db,#6366f1)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    color: '#fff', fontWeight: '700', fontSize: '0.82rem',
+  },
+  adminText: { overflow: 'hidden' },
+  adminName: {
+    margin: 0, fontSize: '0.8rem', fontWeight: '700',
+    color: '#fff', overflow: 'hidden',
+    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  adminRole: {
+    margin: 0, fontSize: '0.68rem',
+    color: 'rgba(255,255,255,0.35)', fontWeight: '500',
+  },
+  logoutBtn: {
+    width: '100%', display: 'flex', alignItems: 'center', gap: '8px',
+    background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)',
+    borderRadius: '9px', color: '#f87171',
+    fontFamily: "'Sora', sans-serif",
+    fontSize: '0.82rem', fontWeight: '600',
+    padding: '8px 10px', cursor: 'pointer',
+    transition: 'background 0.12s',
+  },
+  main: {
+    flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0,
+  },
+  topbar: {
+    background: '#fff', borderBottom: '1px solid #e5e7eb',
+    padding: '0.85rem 1.5rem',
+    display: 'flex', alignItems: 'center',
+    justifyContent: 'space-between', gap: '1rem',
+    flexWrap: 'wrap',
+    position: 'sticky', top: 0, zIndex: 5,
+  },
+  topTitle: {
+    margin: 0, fontSize: '1.15rem',
+    fontWeight: '800', color: '#0f172a',
+    letterSpacing: '-0.01em',
+  },
+  topSub: {
+    margin: '2px 0 0', fontSize: '0.78rem',
+    color: '#6b7280', fontWeight: '500',
+  },
+  topRight: { display: 'flex', alignItems: 'center', gap: '10px' },
+  sessionTag: {
+    display: 'flex', alignItems: 'center', gap: '6px',
+    background: '#f0fdf4', border: '1px solid #bbf7d0',
+    borderRadius: '999px', padding: '5px 12px',
+  },
+  sessionDot: {
+    width: '6px', height: '6px',
+    borderRadius: '50%', background: '#16a34a',
+  },
+  sessionText: {
+    color: '#15803d', fontSize: '0.75rem', fontWeight: '700',
+  },
+  content: {
+    flex: 1, padding: '1.5rem',
+    display: 'flex', flexDirection: 'column', gap: '1.25rem',
+  },
+}

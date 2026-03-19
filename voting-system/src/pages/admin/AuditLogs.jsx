@@ -1,251 +1,398 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../../services/supabase'
-import { useAuth } from '../../context/AuthContext'
-import AdminShell from '../../components/admin/AdminShell'
 import AdminShell from '../../components/admin/AdminShell'
 
-const PAGE_SIZE = 10
+const PAGE_SIZE = 20
 const ADMIN_ROLES = new Set(['super_admin', 'election_officer', 'admin'])
 
-function formatDate(value) {
-  if (!value) return '--'
-  return new Date(value).toLocaleString()
+function formatDate(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return d.toLocaleDateString('en-GH', {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
+}
+
+function EventBadge({ event }) {
+  const MAP = {
+    vote_cast:          { label: 'Vote Cast',        bg: '#dbeafe', color: '#1e40af' },
+    results_approved:   { label: 'Results Approved', bg: '#dcfce7', color: '#15803d' },
+    election_started:   { label: 'Election Started', bg: '#fef9c3', color: '#92400e' },
+    election_ended:     { label: 'Election Ended',   bg: '#fee2e2', color: '#991b1b' },
+    admin_login:        { label: 'Admin Login',      bg: '#ede9fe', color: '#5b21b6' },
+  }
+  const style = MAP[event] ?? { label: event ?? 'Unknown', bg: '#f3f4f6', color: '#374151' }
+  return (
+    <span style={{
+      display: 'inline-block',
+      background: style.bg, color: style.color,
+      borderRadius: '999px', padding: '2px 10px',
+      fontSize: '0.72rem', fontWeight: '700',
+      letterSpacing: '0.03em', whiteSpace: 'nowrap',
+    }}>
+      {style.label}
+    </span>
+  )
 }
 
 export default function AuditLogs() {
-  const navigate = useNavigate()
-  const { role, loading: authLoading } = useAuth()
-  const isAdmin = ADMIN_ROLES.has(role)
+  const mountedRef = useRef(true)
 
-  const [logs, setLogs] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [search, setSearch] = useState('')
-  const [page, setPage] = useState(1)
+  const [logs,       setLogs]       = useState([])
+  const [loading,    setLoading]    = useState(true)
+  const [error,      setError]      = useState('')
+  const [page,       setPage]       = useState(0)
   const [totalCount, setTotalCount] = useState(0)
+  const [filterEvent, setFilterEvent] = useState('')
+  const [filterElection, setFilterElection] = useState('')
+  const [elections,  setElections]  = useState([])
 
-  const totalPages = useMemo(
-    () => Math.max(1, Math.ceil(totalCount / PAGE_SIZE)),
-    [totalCount]
-  )
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
-  const fetchLogs = async (pageNumber = page, studentIdFilter = search) => {
+  // Load elections for filter dropdown
+  useEffect(() => {
+    supabase
+      .from('elections')
+      .select('id, title, name')
+      .order('start_time', { ascending: false })
+      .then(({ data }) => {
+        if (mountedRef.current) setElections(data ?? [])
+      })
+  }, [])
+
+  const loadLogs = useCallback(async (currentPage, eventFilter, electionFilter) => {
+    if (!mountedRef.current) return
     setLoading(true)
     setError('')
 
-    const from = (pageNumber - 1) * PAGE_SIZE
-    const to = from + PAGE_SIZE - 1
+    const from = currentPage * PAGE_SIZE
+    const to   = from + PAGE_SIZE - 1
 
     let query = supabase
-      .from('votes')
-      .select('id, student_id, ip_address, user_agent, created_at', {
-        count: 'exact',
-      })
+      .from('vote_audit_logs')
+      .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(from, to)
 
-    if (studentIdFilter.trim()) {
-      query = query.ilike('student_id', `%${studentIdFilter.trim()}%`)
-    }
+    if (eventFilter)    query = query.eq('event', eventFilter)
+    if (electionFilter) query = query.eq('election_id', electionFilter)
 
-    const { data, error: fetchError, count } = await query
+    const { data, count, error: qErr } = await query
 
-    if (fetchError) {
-      setError(fetchError.message || 'Failed to load audit logs.')
+    if (!mountedRef.current) return
+
+    if (qErr) {
+      // Table might not exist yet — show a helpful empty state instead of crashing
+      if (qErr.code === '42P01') {
+        setError('Audit log table does not exist yet. Run the supabase_fixes.sql migration first.')
+      } else {
+        setError(qErr.message || 'Failed to load audit logs.')
+      }
       setLogs([])
       setTotalCount(0)
-      setLoading(false)
-      return
+    } else {
+      setLogs(data ?? [])
+      setTotalCount(count ?? 0)
     }
 
-    setLogs(data ?? [])
-    setTotalCount(count ?? 0)
     setLoading(false)
-  }
+  }, [])
 
   useEffect(() => {
-    if (authLoading) return
-    if (!isAdmin) {
-      setLoading(false)
-      return
-    }
+    loadLogs(page, filterEvent, filterElection)
+  }, [loadLogs, page, filterEvent, filterElection])
 
-    fetchLogs(1, search)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, isAdmin])
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
 
-  const handleSearchSubmit = (event) => {
-    event.preventDefault()
-    setPage(1)
-    fetchLogs(1, search)
-  }
-
-  const handlePrev = () => {
-    const next = Math.max(1, page - 1)
-    setPage(next)
-    fetchLogs(next, search)
-  }
-
-  const handleNext = () => {
-    const next = Math.min(totalPages, page + 1)
-    setPage(next)
-    fetchLogs(next, search)
-  }
-
-  if (authLoading) {
-    return (
-      <main className="page-animate-in min-h-screen bg-slate-50 text-slate-900">
-        <div className="mx-auto w-full max-w-6xl px-4 py-10 md:px-8">
-          <div className="grid min-h-[240px] place-items-center rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center gap-3 text-slate-700">
-              <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-900/20 border-t-slate-900" />
-              <p className="text-sm font-semibold">Loading audit logs...</p>
-            </div>
-          </div>
-        </div>
-      </main>
-    )
-  }
-
-  if (!isAdmin) {
-    return (
-      <main className="page-animate-in min-h-screen bg-slate-50 text-slate-900">
-        <div className="mx-auto w-full max-w-2xl px-4 py-12 md:px-8">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h1 className="text-2xl font-black tracking-tight">Access Denied</h1>
-            <p className="mt-2 text-sm text-slate-600">
-              Admin access is required to view audit logs.
-            </p>
-            <button
-              className="mt-6 inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
-              onClick={() => navigate('/dashboard')}
-              type="button"
-            >
-              Back to Dashboard
-            </button>
-          </div>
-        </div>
-      </main>
-    )
+  const handleFilterChange = (newEvent, newElection) => {
+    setPage(0)   // reset to first page on filter change
+    setFilterEvent(newEvent)
+    setFilterElection(newElection)
   }
 
   return (
-    <AdminShell title="Audit Logs" subtitle="Review vote activity and metadata.">
-      <div className="mx-auto w-full max-w-6xl">
-        <form className="flex flex-col gap-3 sm:flex-row" onSubmit={handleSearchSubmit}>
-          <input
-            className="h-10 w-full flex-1 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-slate-900 focus:ring-4 focus:ring-slate-900/10"
-            placeholder="Search by student ID"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-          <button
-            className="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
-            type="submit"
+    <AdminShell title="Audit Logs" subtitle="Review all system and administrative activity">
+      <style>{`
+        .al-row:hover td { background: #f8fafc !important; }
+        .al-page-btn:hover:not(:disabled) { border-color: #1a56db !important; color: #1a56db !important; }
+        .al-select:focus { outline: none; border-color: #1a56db !important; }
+        .al-refresh:hover { border-color: #1a56db !important; color: #1a56db !important; background: #eff6ff !important; }
+      `}</style>
+
+      {/* Filter bar */}
+      <div style={fc.bar}>
+        <div style={fc.filterGroup}>
+          <label style={fc.label}>Event Type</label>
+          <select
+            className="al-select"
+            style={fc.select}
+            value={filterEvent}
+            onChange={e => handleFilterChange(e.target.value, filterElection)}
           >
-            Search
-          </button>
-        </form>
-
-        {error ? (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-            {error}
-          </div>
-        ) : null}
-
-        <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          {loading ? (
-            <div className="grid min-h-[220px] place-items-center p-6">
-              <div className="flex items-center gap-3 text-slate-700">
-                <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-900/20 border-t-slate-900" />
-                <p className="text-sm font-semibold">Loading audit logs...</p>
-              </div>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-[900px] w-full border-collapse">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="border-b border-slate-200 px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                      Vote ID
-                    </th>
-                    <th className="border-b border-slate-200 px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                      Student ID
-                    </th>
-                    <th className="border-b border-slate-200 px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                      IP Address
-                    </th>
-                    <th className="border-b border-slate-200 px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                      User Agent
-                    </th>
-                    <th className="border-b border-slate-200 px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
-                      Timestamp
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.length === 0 ? (
-                    <tr>
-                      <td
-                        className="px-4 py-10 text-center text-sm font-semibold text-slate-500"
-                        colSpan={5}
-                      >
-                        No audit logs found.
-                      </td>
-                    </tr>
-                  ) : (
-                    logs.map((log) => (
-                      <tr key={log.id} className="transition hover:bg-slate-50">
-                        <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-900">
-                          {log.id}
-                        </td>
-                        <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-900">
-                          {log.student_id ?? '--'}
-                        </td>
-                        <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-700">
-                          {log.ip_address ?? '--'}
-                        </td>
-                        <td
-                          className="border-b border-slate-100 px-4 py-3 text-sm text-slate-700"
-                          title={log.user_agent ?? ''}
-                        >
-                          {log.user_agent ? log.user_agent.slice(0, 60) : '--'}
-                        </td>
-                        <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-700">
-                          {formatDate(log.created_at)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
+            <option value="">All Events</option>
+            <option value="vote_cast">Vote Cast</option>
+            <option value="results_approved">Results Approved</option>
+            <option value="election_started">Election Started</option>
+            <option value="election_ended">Election Ended</option>
+            <option value="admin_login">Admin Login</option>
+          </select>
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-3">
-          <button
-            className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={handlePrev}
-            disabled={page <= 1 || loading}
-            type="button"
+        <div style={fc.filterGroup}>
+          <label style={fc.label}>Election</label>
+          <select
+            className="al-select"
+            style={fc.select}
+            value={filterElection}
+            onChange={e => handleFilterChange(filterEvent, e.target.value)}
           >
-            Prev
-          </button>
-          <span className="text-sm font-semibold text-slate-600">
-            Page {page} of {totalPages}
-          </span>
+            <option value="">All Elections</option>
+            {elections.map(el => (
+              <option key={el.id} value={el.id}>
+                {el.title ?? el.name ?? el.id}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div style={fc.filterGroup}>
+          <label style={fc.label}>&nbsp;</label>
           <button
-            className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={handleNext}
-            disabled={page >= totalPages || loading}
-            type="button"
+            className="al-refresh"
+            style={fc.refreshBtn}
+            onClick={() => loadLogs(page, filterEvent, filterElection)}
           >
-            Next
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="23 4 23 10 17 10"/>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
+            Refresh
           </button>
+        </div>
+
+        <div style={fc.countBadge}>
+          {totalCount.toLocaleString()} record{totalCount !== 1 ? 's' : ''}
         </div>
       </div>
+
+      {/* Error */}
+      {error && (
+        <div style={st.errorBox}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          {error}
+        </div>
+      )}
+
+      {/* Table */}
+      <div style={st.tableWrap}>
+        <table style={st.table}>
+          <thead>
+            <tr>
+              <th style={st.th}>Timestamp</th>
+              <th style={st.th}>Event</th>
+              <th style={st.th}>Election ID</th>
+              <th style={st.th}>Position ID</th>
+              <th style={st.th}>Candidate ID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={5} style={st.centerCell}>
+                  <div style={st.loadingRow}>
+                    <div style={st.spinner} />
+                    Loading audit logs...
+                  </div>
+                </td>
+              </tr>
+            ) : logs.length === 0 ? (
+              <tr>
+                <td colSpan={5} style={st.centerCell}>
+                  <div style={st.emptyState}>
+                    <span style={st.emptyIcon}>📋</span>
+                    <p style={st.emptyTitle}>No log entries found</p>
+                    <p style={st.emptyText}>
+                      {filterEvent || filterElection
+                        ? 'Try adjusting your filters.'
+                        : 'Audit entries will appear here as system actions occur.'}
+                    </p>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              logs.map((row, i) => (
+                <tr key={row.id ?? i} className="al-row">
+                  <td style={st.td}>{formatDate(row.created_at)}</td>
+                  <td style={st.td}><EventBadge event={row.event} /></td>
+                  <td style={{ ...st.td, ...st.mono }}>{row.election_id ? shortId(row.election_id) : '—'}</td>
+                  <td style={{ ...st.td, ...st.mono }}>{row.position_id ? shortId(row.position_id) : '—'}</td>
+                  <td style={{ ...st.td, ...st.mono }}>{row.candidate_id ? shortId(row.candidate_id) : '—'}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      {!loading && totalPages > 1 && (
+        <div style={st.pagination}>
+          <button
+            className="al-page-btn"
+            style={{ ...st.pageBtn, ...(page === 0 ? st.pageBtnDisabled : {}) }}
+            disabled={page === 0}
+            onClick={() => setPage(0)}
+          >«</button>
+          <button
+            className="al-page-btn"
+            style={{ ...st.pageBtn, ...(page === 0 ? st.pageBtnDisabled : {}) }}
+            disabled={page === 0}
+            onClick={() => setPage(p => p - 1)}
+          >‹ Prev</button>
+
+          <span style={st.pageInfo}>
+            Page {page + 1} of {totalPages}
+          </span>
+
+          <button
+            className="al-page-btn"
+            style={{ ...st.pageBtn, ...(page >= totalPages - 1 ? st.pageBtnDisabled : {}) }}
+            disabled={page >= totalPages - 1}
+            onClick={() => setPage(p => p + 1)}
+          >Next ›</button>
+          <button
+            className="al-page-btn"
+            style={{ ...st.pageBtn, ...(page >= totalPages - 1 ? st.pageBtnDisabled : {}) }}
+            disabled={page >= totalPages - 1}
+            onClick={() => setPage(totalPages - 1)}
+          >»</button>
+        </div>
+      )}
     </AdminShell>
   )
+}
+
+// Show only first 8 chars of a UUID for display
+function shortId(uuid) {
+  return uuid ? uuid.slice(0, 8) + '…' : '—'
+}
+
+const fc = {
+  bar: {
+    background: '#fff', border: '1px solid #e5e7eb',
+    borderRadius: '14px', padding: '1rem 1.25rem',
+    display: 'flex', alignItems: 'flex-end',
+    gap: '1rem', flexWrap: 'wrap',
+  },
+  filterGroup: { display: 'flex', flexDirection: 'column', gap: '4px' },
+  label: {
+    fontSize: '0.72rem', fontWeight: '700',
+    color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em',
+  },
+  select: {
+    height: '38px', border: '1px solid #e5e7eb',
+    borderRadius: '8px', padding: '0 10px',
+    background: '#f9fafb', color: '#0f172a',
+    fontSize: '0.85rem', fontFamily: "'Sora', sans-serif",
+    cursor: 'pointer', minWidth: '160px',
+    transition: 'border-color 0.15s',
+  },
+  refreshBtn: {
+    height: '38px', display: 'flex', alignItems: 'center', gap: '6px',
+    background: '#fff', border: '1px solid #e5e7eb',
+    borderRadius: '8px', padding: '0 14px',
+    color: '#374151', fontSize: '0.82rem', fontWeight: '600',
+    cursor: 'pointer', fontFamily: "'Sora', sans-serif",
+    transition: 'border-color 0.15s, color 0.15s, background 0.15s',
+  },
+  countBadge: {
+    marginLeft: 'auto', alignSelf: 'flex-end',
+    background: '#f3f4f6', borderRadius: '999px',
+    padding: '5px 14px', fontSize: '0.78rem',
+    fontWeight: '700', color: '#374151',
+    whiteSpace: 'nowrap',
+  },
+}
+
+const st = {
+  errorBox: {
+    display: 'flex', alignItems: 'center', gap: '8px',
+    background: '#fef2f2', border: '1px solid #fecaca',
+    borderRadius: '10px', padding: '12px 16px',
+    color: '#991b1b', fontSize: '0.875rem', fontWeight: '500',
+  },
+  tableWrap: {
+    background: '#fff', border: '1px solid #e5e7eb',
+    borderRadius: '16px', overflow: 'hidden',
+  },
+  table: {
+    width: '100%', borderCollapse: 'collapse',
+    fontSize: '0.85rem',
+  },
+  th: {
+    textAlign: 'left', fontWeight: '700',
+    padding: '11px 14px',
+    borderBottom: '1px solid #e5e7eb',
+    color: '#374151', background: '#f9fafb',
+    fontSize: '0.75rem', textTransform: 'uppercase',
+    letterSpacing: '0.05em', whiteSpace: 'nowrap',
+  },
+  td: {
+    padding: '11px 14px',
+    borderBottom: '1px solid #f3f4f6',
+    color: '#0f172a', verticalAlign: 'middle',
+  },
+  mono: {
+    fontFamily: "'JetBrains Mono', 'Courier New', monospace",
+    fontSize: '0.78rem', color: '#6b7280',
+  },
+  centerCell: {
+    padding: '2.5rem', textAlign: 'center',
+    color: '#6b7280',
+  },
+  loadingRow: {
+    display: 'flex', alignItems: 'center',
+    justifyContent: 'center', gap: '10px',
+    fontWeight: '600', fontSize: '0.875rem',
+  },
+  spinner: {
+    width: '18px', height: '18px',
+    border: '2px solid #e5e7eb', borderTopColor: '#1a56db',
+    borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+  },
+  emptyState: {
+    display: 'flex', flexDirection: 'column',
+    alignItems: 'center', gap: '6px',
+  },
+  emptyIcon: { fontSize: '2rem', marginBottom: '4px' },
+  emptyTitle: { margin: 0, fontSize: '1rem', fontWeight: '700', color: '#0f172a' },
+  emptyText: { margin: 0, fontSize: '0.85rem', color: '#6b7280' },
+  pagination: {
+    display: 'flex', alignItems: 'center',
+    justifyContent: 'center', gap: '6px',
+    flexWrap: 'wrap',
+  },
+  pageBtn: {
+    background: '#fff', border: '1px solid #e5e7eb',
+    borderRadius: '8px', padding: '7px 14px',
+    color: '#374151', fontSize: '0.82rem', fontWeight: '600',
+    cursor: 'pointer', fontFamily: "'Sora', sans-serif",
+    transition: 'border-color 0.15s, color 0.15s',
+  },
+  pageBtnDisabled: {
+    opacity: 0.4, cursor: 'not-allowed',
+    pointerEvents: 'none',
+  },
+  pageInfo: {
+    padding: '0 10px', fontSize: '0.82rem',
+    color: '#6b7280', fontWeight: '600',
+  },
 }
