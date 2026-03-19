@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../../services/supabase'
 
 export default function Signup() {
   const navigate = useNavigate()
-  const redirectTimeoutRef = useRef(null)
 
   const [studentId, setStudentId] = useState('')
   const [fullName, setFullName] = useState('')
@@ -12,233 +11,176 @@ export default function Signup() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
 
-  useEffect(() => {
-    return () => {
-      if (redirectTimeoutRef.current) {
-        clearTimeout(redirectTimeoutRef.current)
-      }
-    }
-  }, [])
-
-  const handleSubmit = async (event) => {
-    event.preventDefault()
+  const handleSignup = async (e) => {
+    e.preventDefault()
     setError('')
-    setSuccess('')
 
-    if (!/^\d{10}$/.test(studentId)) {
-      setError('Student ID must be exactly 10 digits.')
-      return
-    }
-
-    if (!fullName.trim()) {
-      setError('Full name is required.')
-      return
-    }
+    const trimmedStudentId = studentId.trim()
+    const trimmedFullName = fullName.trim()
 
     if (password !== confirmPassword) {
-      setError('Passwords do not match.')
+      setError('Passwords do not match')
       return
     }
+
+    if (!/^\d{10}$/.test(trimmedStudentId)) {
+      setError('Student ID must be 10 digits')
+      return
+    }
+
+    if (!trimmedFullName) {
+      setError('Full name is required')
+      return
+    }
+
+    const email = `${trimmedStudentId}@st.ug.edu.gh`
 
     setLoading(true)
 
-    try {
-      const email = `${studentId}@st.ug.edu.gh`
+    const { data, error: signUpError } = await supabase.auth.signUp({
+      email: email,
+      password: password,
+      options: {
+        data: {
+          full_name: trimmedFullName,
+          student_id: trimmedStudentId,
+        },
+      },
+    })
 
-      const { data: signUpData, error: signUpError } =
-        await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              full_name: fullName.trim(),
-              student_id: studentId,
-            },
-          },
-        })
-
-      if (signUpError) throw signUpError
-
-      const userId = signUpData?.user?.id
-      if (!userId) {
-        throw new Error('Signup completed but no user record was returned.')
-      }
-
-      const { error: profileError } = await supabase.from('profiles').insert({
-        id: userId,
-        role: 'student',
-      })
-
-      if (profileError) throw profileError
-
-      setSuccess('Signup successful. Redirecting to login...')
-      redirectTimeoutRef.current = setTimeout(() => {
-        navigate('/login')
-      }, 1500)
-    } catch (err) {
-      setError(err?.message || 'Signup failed. Please try again.')
-    } finally {
+    if (signUpError) {
+      setError(signUpError.message)
       setLoading(false)
+      return
     }
+
+    if (!data?.user?.id) {
+      setError('Signup completed but no user record was returned.')
+      setLoading(false)
+      return
+    }
+
+    setLoading(false)
+    navigate('/dashboard')
   }
 
   return (
-    <div style={styles.page}>
-      <style>
-        {`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}
-      </style>
+    <div className="page-animate-in min-h-screen bg-slate-50 text-slate-900">
+      <div className="mx-auto flex min-h-screen w-full max-w-6xl items-center justify-center px-4 py-10 md:px-8">
+        <div className="grid w-full max-w-md gap-6">
+          <header className="text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-700 text-white shadow-sm">
+              <span className="text-sm font-extrabold tracking-wide">UV</span>
+            </div>
+            <h1 className="mt-4 text-3xl font-black tracking-tight">Create your account</h1>
+            <p className="mt-2 text-sm text-slate-600">
+              Register with your Student ID to participate in elections.
+            </p>
+          </header>
 
-      <form style={styles.form} onSubmit={handleSubmit}>
-        <h1 style={styles.title}>Create Account</h1>
+          <form
+            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+            onSubmit={handleSignup}
+          >
+            <div className="grid gap-4">
+              <div>
+                <label htmlFor="fullName" className="text-sm font-semibold text-slate-700">
+                  Full Name
+                </label>
+                <input
+                  id="fullName"
+                  type="text"
+                  value={fullName}
+                  onChange={(event) => setFullName(event.target.value)}
+                  placeholder="Enter full name"
+                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-blue-700 focus:ring-4 focus:ring-blue-700/10 disabled:cursor-not-allowed disabled:opacity-70"
+                  disabled={loading}
+                  autoComplete="name"
+                />
+              </div>
 
-        <label htmlFor="studentId" style={styles.label}>
-          Student ID
-        </label>
-        <input
-          id="studentId"
-          type="text"
-          inputMode="numeric"
-          maxLength={10}
-          value={studentId}
-          onChange={(event) =>
-            setStudentId(event.target.value.replace(/\D/g, ''))
-          }
-          placeholder="Enter 10-digit student ID"
-          style={styles.input}
-          disabled={loading}
-        />
+              <div>
+                <label htmlFor="studentId" className="text-sm font-semibold text-slate-700">
+                  Student ID
+                </label>
+                <input
+                  id="studentId"
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={10}
+                  value={studentId}
+                  onChange={(event) => setStudentId(event.target.value.replace(/\D/g, ''))}
+                  placeholder="Enter 10-digit student ID"
+                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-blue-700 focus:ring-4 focus:ring-blue-700/10 disabled:cursor-not-allowed disabled:opacity-70"
+                  disabled={loading}
+                  autoComplete="username"
+                />
+              </div>
 
-        <label htmlFor="fullName" style={styles.label}>
-          Full Name
-        </label>
-        <input
-          id="fullName"
-          type="text"
-          value={fullName}
-          onChange={(event) => setFullName(event.target.value)}
-          placeholder="Enter full name"
-          style={styles.input}
-          disabled={loading}
-        />
+              <div>
+                <label htmlFor="password" className="text-sm font-semibold text-slate-700">
+                  Password
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Enter password"
+                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-blue-700 focus:ring-4 focus:ring-blue-700/10 disabled:cursor-not-allowed disabled:opacity-70"
+                  disabled={loading}
+                  autoComplete="new-password"
+                />
+              </div>
 
-        <label htmlFor="password" style={styles.label}>
-          Password
-        </label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder="Enter password"
-          style={styles.input}
-          disabled={loading}
-        />
+              <div>
+                <label htmlFor="confirmPassword" className="text-sm font-semibold text-slate-700">
+                  Confirm Password
+                </label>
+                <input
+                  id="confirmPassword"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  placeholder="Confirm password"
+                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-blue-700 focus:ring-4 focus:ring-blue-700/10 disabled:cursor-not-allowed disabled:opacity-70"
+                  disabled={loading}
+                  autoComplete="new-password"
+                />
+              </div>
 
-        <label htmlFor="confirmPassword" style={styles.label}>
-          Confirm Password
-        </label>
-        <input
-          id="confirmPassword"
-          type="password"
-          value={confirmPassword}
-          onChange={(event) => setConfirmPassword(event.target.value)}
-          placeholder="Confirm password"
-          style={styles.input}
-          disabled={loading}
-        />
+              {error ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                  {error}
+                </div>
+              ) : null}
 
-        {error ? <p style={styles.error}>{error}</p> : null}
-        {success ? <p style={styles.success}>{success}</p> : null}
+              <button
+                type="submit"
+                disabled={loading}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-blue-800 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {loading ? (
+                  <>
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    Creating account...
+                  </>
+                ) : (
+                  'Create Account'
+                )}
+              </button>
+            </div>
 
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            ...styles.button,
-            ...(loading ? styles.buttonDisabled : {}),
-          }}
-        >
-          {loading ? (
-            <span style={styles.loadingWrap}>
-              <span style={styles.spinner} />
-              Creating account...
-            </span>
-          ) : (
-            'Sign Up'
-          )}
-        </button>
-      </form>
+            <p className="mt-5 text-center text-sm text-slate-600">
+              Already have an account?{' '}
+              <Link to="/login" className="font-semibold text-blue-700 hover:text-blue-800">
+                Login
+              </Link>
+            </p>
+          </form>
+        </div>
+      </div>
     </div>
   )
-}
-
-const styles = {
-  page: {
-    minHeight: '100vh',
-    display: 'grid',
-    placeItems: 'center',
-    padding: '1rem',
-  },
-  form: {
-    width: '100%',
-    maxWidth: '420px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.75rem',
-    padding: '1.5rem',
-    border: '1px solid #ddd',
-    borderRadius: '12px',
-  },
-  title: {
-    margin: '0 0 0.5rem',
-  },
-  label: {
-    fontSize: '0.9rem',
-    fontWeight: 600,
-  },
-  input: {
-    height: '42px',
-    padding: '0 0.75rem',
-    border: '1px solid #ccc',
-    borderRadius: '8px',
-  },
-  error: {
-    color: '#b42318',
-    fontSize: '0.9rem',
-    margin: 0,
-  },
-  success: {
-    color: '#027a48',
-    fontSize: '0.9rem',
-    margin: 0,
-  },
-  button: {
-    marginTop: '0.25rem',
-    height: '42px',
-    border: 'none',
-    borderRadius: '8px',
-    background: '#111827',
-    color: '#fff',
-    fontWeight: 600,
-    cursor: 'pointer',
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-    cursor: 'not-allowed',
-  },
-  loadingWrap: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '0.5rem',
-  },
-  spinner: {
-    width: '14px',
-    height: '14px',
-    border: '2px solid #ffffff66',
-    borderTopColor: '#fff',
-    borderRadius: '50%',
-    animation: 'spin 0.8s linear infinite',
-  },
 }

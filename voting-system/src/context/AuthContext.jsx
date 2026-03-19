@@ -3,21 +3,46 @@ import { supabase } from '../services/supabase'
 
 export const AuthContext = createContext(undefined)
 
-async function getRoleFromProfile(userId) {
+async function getRoleFromTables(userId) {
   if (!userId) return null
 
-  const { data, error } = await supabase
+  const { data: profileRecord, error: profileError } = await supabase
     .from('profiles')
     .select('role')
     .eq('id', userId)
     .maybeSingle()
 
-  if (error) {
-    console.error('Failed to fetch role from profiles:', error)
+  if (profileError) {
+    console.error('Failed to fetch role from profiles:', profileError)
+  } else if (profileRecord?.role) {
+    return profileRecord.role
+  }
+
+  const { data: adminRecord, error: adminError } = await supabase
+    .from('admins')
+    .select('id')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (adminError) {
+    console.error('Failed to fetch role from admins:', adminError)
     return null
   }
 
-  return data?.role ?? null
+  if (adminRecord) return 'admin'
+
+  const { data: studentRecord, error: studentError } = await supabase
+    .from('students')
+    .select('id')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (studentError) {
+    console.error('Failed to fetch role from students:', studentError)
+    return null
+  }
+
+  return studentRecord ? 'student' : null
 }
 
 export function AuthProvider({ children }) {
@@ -39,7 +64,7 @@ export function AuthProvider({ children }) {
         return
       }
 
-      const nextRole = await getRoleFromProfile(nextUser.id)
+      const nextRole = await getRoleFromTables(nextUser.id)
       if (isActive) {
         setRole(nextRole)
       }
@@ -96,7 +121,7 @@ export function AuthProvider({ children }) {
     setUser(nextUser)
 
     if (nextUser) {
-      const nextRole = await getRoleFromProfile(nextUser.id)
+      const nextRole = await getRoleFromTables(nextUser.id)
       setRole(nextRole)
     } else {
       setRole(null)
